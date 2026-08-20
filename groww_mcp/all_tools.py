@@ -68,23 +68,23 @@ def groww_get_order_list(segment: str | None = None, page: int = 0, page_size: i
 
 
 # 8
-def groww_get_order_detail(groww_order_id: str, segment: str = "CASH") -> dict[str, Any]:
-    """Return detailed information for one order."""
+def groww_get_order_detail(groww_order_id: str, segment: str | None = None) -> dict[str, Any]:
+    """Return detailed information for one order. Segment auto-detected if omitted."""
     if is_mock():
         return {"mode": "mock", "data": {"groww_order_id": groww_order_id}}
     return _c().get_order_detail(groww_order_id, segment)
 
 
 # 9
-def groww_get_order_status(groww_order_id: str, segment: str = "CASH") -> dict[str, Any]:
-    """Return status for one order."""
+def groww_get_order_status(groww_order_id: str, segment: str | None = None) -> dict[str, Any]:
+    """Return status for one order. Segment auto-detected if omitted."""
     if is_mock():
         return {"mode": "mock", "data": {"order_status": "NEW"}}
     return _c().get_order_status(groww_order_id, segment)
 
 
 # 10
-def groww_get_order_status_by_reference(order_reference_id: str, segment: str = "CASH") -> dict[str, Any]:
+def groww_get_order_status_by_reference(order_reference_id: str, segment: str | None = None) -> dict[str, Any]:
     """Return order status by reference ID."""
     if is_mock():
         return {"mode": "mock", "data": {"order_status": "NEW"}}
@@ -92,8 +92,8 @@ def groww_get_order_status_by_reference(order_reference_id: str, segment: str = 
 
 
 # 11
-def groww_get_order_trades(groww_order_id: str, segment: str = "CASH") -> dict[str, Any]:
-    """Return trade executions for an order."""
+def groww_get_order_trades(groww_order_id: str, segment: str | None = None) -> dict[str, Any]:
+    """Return trade executions for an order. Segment auto-detected if omitted."""
     if is_mock():
         return {"mode": "mock", "data": {"trades": []}}
     return _c().get_order_trades(groww_order_id, segment)

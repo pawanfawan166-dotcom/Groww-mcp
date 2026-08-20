@@ -9,6 +9,10 @@ from growwapi import GrowwAPI
 
 from groww_mcp.config import Settings
 from groww_mcp.market_data import (
+    fetch_contracts as fetch_contracts_fallback,
+    fetch_expiries as fetch_expiries_fallback,
+    fetch_greeks as fetch_greeks_fallback,
+    fetch_historical_candles as fetch_historical_candles_fallback,
     fetch_ltp as fetch_ltp_fallback,
     fetch_ohlc as fetch_ohlc_fallback,
     fetch_option_chain_summary as fetch_option_chain_fallback,
@@ -217,6 +221,126 @@ class GrowwClient:
             "underlying": underlying.upper(),
             "expiry_date": expiry_date,
             "option_chain": data,
+            "price_source": price_source,
+        }
+
+    def get_greeks(
+        self,
+        exchange: str,
+        underlying: str,
+        trading_symbol: str,
+        expiry: str,
+    ) -> dict[str, Any]:
+        price_source = "groww"
+        try:
+            data = self._ensure_client().get_greeks(
+                exchange=exchange.upper(),
+                underlying=underlying.upper(),
+                trading_symbol=trading_symbol.upper(),
+                expiry=expiry,
+            )
+        except Exception:
+            data = fetch_greeks_fallback(underlying, trading_symbol, expiry, exchange)
+            price_source = "black_scholes_estimate"
+
+        return {
+            "mode": "live",
+            "exchange": exchange.upper(),
+            "underlying": underlying.upper(),
+            "trading_symbol": trading_symbol.upper(),
+            "expiry": expiry,
+            "greeks": data,
+            "price_source": price_source,
+        }
+
+    def get_historical_candles(
+        self,
+        exchange: str,
+        segment: str,
+        groww_symbol: str,
+        start_time: str,
+        end_time: str,
+        candle_interval: str = "1day",
+    ) -> dict[str, Any]:
+        price_source = "groww"
+        try:
+            data = self._ensure_client().get_historical_candles(
+                exchange=exchange.upper(),
+                segment=self._resolve_segment(segment),
+                groww_symbol=groww_symbol.upper(),
+                start_time=start_time,
+                end_time=end_time,
+                candle_interval=candle_interval,
+                timeout=15,
+            )
+        except Exception:
+            data = fetch_historical_candles_fallback(
+                groww_symbol, exchange, start_time, end_time, candle_interval
+            )
+            price_source = "yahoo_finance"
+
+        return {
+            "mode": "live",
+            "exchange": exchange.upper(),
+            "segment": segment.upper(),
+            "symbol": groww_symbol.upper(),
+            "candle_interval": candle_interval,
+            "data": data,
+            "price_source": price_source,
+        }
+
+    def get_expiries(
+        self,
+        exchange: str,
+        underlying_symbol: str,
+        year: int | None = None,
+        month: int | None = None,
+    ) -> dict[str, Any]:
+        price_source = "groww"
+        try:
+            data = self._ensure_client().get_expiries(
+                exchange=exchange.upper(),
+                underlying_symbol=underlying_symbol.upper(),
+                year=year,
+                month=month,
+                timeout=15,
+            )
+        except Exception:
+            data = fetch_expiries_fallback(underlying_symbol, exchange, year, month)
+            price_source = "calendar_estimate"
+
+        return {
+            "mode": "live",
+            "exchange": exchange.upper(),
+            "underlying_symbol": underlying_symbol.upper(),
+            "expiries": data,
+            "price_source": price_source,
+        }
+
+    def get_contracts(
+        self,
+        exchange: str,
+        underlying_symbol: str,
+        expiry_date: str,
+    ) -> dict[str, Any]:
+        price_source = "groww"
+        try:
+            data = self._ensure_client().get_contracts(
+                exchange=exchange.upper(),
+                underlying_symbol=underlying_symbol.upper(),
+                expiry_date=expiry_date,
+                timeout=15,
+            )
+        except Exception:
+            data = fetch_contracts_fallback(underlying_symbol, expiry_date, exchange)
+            price_source = "synthetic_estimate"
+
+        return {
+            "mode": "live",
+            "exchange": exchange.upper(),
+            "underlying_symbol": underlying_symbol.upper(),
+            "expiry_date": expiry_date,
+            "contracts": data,
             "price_source": price_source,
         }
 
