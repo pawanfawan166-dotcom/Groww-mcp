@@ -8,7 +8,12 @@ import pyotp
 from growwapi import GrowwAPI
 
 from groww_mcp.config import Settings
-from groww_mcp.market_data import fetch_ltp as fetch_ltp_fallback
+from groww_mcp.market_data import (
+    fetch_ltp as fetch_ltp_fallback,
+    fetch_ohlc as fetch_ohlc_fallback,
+    fetch_option_chain_summary as fetch_option_chain_fallback,
+    fetch_quote as fetch_quote_fallback,
+)
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -58,18 +63,63 @@ class GrowwClient:
             self._token_date = datetime.now(IST)
         return self._client
 
+    @staticmethod
+    def _resolve_segment(segment: str) -> str:
+        segment = segment.upper()
+        if segment in {GrowwAPI.SEGMENT_CASH, GrowwAPI.SEGMENT_FNO, GrowwAPI.SEGMENT_COMMODITY}:
+            return segment
+        mapping = {
+            "CASH": GrowwAPI.SEGMENT_CASH,
+            "FNO": GrowwAPI.SEGMENT_FNO,
+            "COMMODITY": GrowwAPI.SEGMENT_COMMODITY,
+            "EQUITY": GrowwAPI.SEGMENT_CASH,
+        }
+        if segment not in mapping:
+            raise ValueError(f"Unsupported segment: {segment}")
+        return mapping[segment]
+
+    @staticmethod
+    def _exchange_symbol(exchange: str, trading_symbol: str) -> str:
+        return f"{exchange.upper()}_{trading_symbol.upper()}"
+
     def get_holdings(self) -> dict[str, Any]:
         response = self._ensure_client().get_holdings_for_user(timeout=15)
         holdings = response.get("holdings", response) if isinstance(response, dict) else response
         return {"mode": "live", "holdings": holdings}
 
-    def get_ltp(self, trading_symbol: str, exchange: str = "NSE") -> dict[str, Any]:
-        exchange_symbol = f"{exchange.upper()}_{trading_symbol.upper()}"
+    def get_ltp(
+        self,
+        trading_symbol: str,
+        exchange: str = "NSE",
+        segment: str = "CASH",
+    ) -> dict[str, Any]:
+        symbols = [s.strip() for s in trading_symbol.split(",") if s.strip()]
+        if len(symbols) == 1:
+            return self._get_single_ltp(symbols[0], exchange, segment)
+
+        rows: dict[str, Any] = {}
+        sources: set[str] = set()
+        for symbol in symbols[:50]:
+            item = self._get_single_ltp(symbol, exchange, segment)
+            key = self._exchange_symbol(exchange, symbol)
+            rows[key] = item["ltp"]
+            sources.add(str(item["price_source"]))
+
+        return {
+            "mode": "live",
+            "exchange": exchange.upper(),
+            "segment": segment.upper(),
+            "ltp": rows,
+            "price_source": sorted(sources),
+        }
+
+    def _get_single_ltp(self, trading_symbol: str, exchange: str, segment: str) -> dict[str, Any]:
+        exchange_symbol = self._exchange_symbol(exchange, trading_symbol)
         price_source = "groww"
         try:
             response = self._ensure_client().get_ltp(
                 (exchange_symbol,),
-                segment=GrowwAPI.SEGMENT_CASH,
+                segment=self._resolve_segment(segment),
                 timeout=15,
             )
             ltp = response.get(exchange_symbol) if isinstance(response, dict) else response
@@ -81,7 +131,92 @@ class GrowwClient:
             "mode": "live",
             "trading_symbol": trading_symbol.upper(),
             "exchange": exchange.upper(),
+            "segment": segment.upper(),
             "ltp": ltp,
+            "price_source": price_source,
+        }
+
+    def get_quote(
+        self,
+        trading_symbol: str,
+        exchange: str = "NSE",
+        segment: str = "CASH",
+    ) -> dict[str, Any]:
+        price_source = "groww"
+        try:
+            data = self._ensure_client().get_quote(
+                trading_symbol=trading_symbol.upper(),
+                exchange=exchange.upper(),
+                segment=self._resolve_segment(segment),
+                timeout=15,
+            )
+        except Exception:
+            data = fetch_quote_fallback(trading_symbol, exchange)
+            price_source = "yahoo_finance"
+
+        return {
+            "mode": "live",
+            "trading_symbol": trading_symbol.upper(),
+            "exchange": exchange.upper(),
+            "segment": segment.upper(),
+            "quote": data,
+            "price_source": price_source,
+        }
+
+    def get_ohlc(
+        self,
+        trading_symbol: str,
+        exchange: str = "NSE",
+        segment: str = "CASH",
+    ) -> dict[str, Any]:
+        symbols = [s.strip() for s in trading_symbol.split(",") if s.strip()]
+        exchange_symbols = tuple(self._exchange_symbol(exchange, s) for s in symbols[:50])
+        price_source = "groww"
+        try:
+            data = self._ensure_client().get_ohlc(
+                exchange_symbols,
+                segment=self._resolve_segment(segment),
+                timeout=15,
+            )
+        except Exception:
+            data = {
+                self._exchange_symbol(exchange, symbol): fetch_ohlc_fallback(symbol, exchange)
+                for symbol in symbols
+            }
+            price_source = "yahoo_finance"
+
+        return {
+            "mode": "live",
+            "exchange": exchange.upper(),
+            "segment": segment.upper(),
+            "ohlc": data,
+            "price_source": price_source,
+        }
+
+    def get_option_chain(
+        self,
+        underlying: str,
+        expiry_date: str,
+        exchange: str = "NSE",
+    ) -> dict[str, Any]:
+        price_source = "groww"
+        try:
+            data = self._ensure_client().get_option_chain(
+                exchange=exchange.upper(),
+                underlying=underlying.upper(),
+                expiry_date=expiry_date,
+                timeout=15,
+            )
+        except Exception:
+            data = fetch_option_chain_fallback(underlying, exchange, expiry_date)
+            price_source = "yahoo_finance"
+
+        return {
+            "mode": "live",
+            "exchange": exchange.upper(),
+            "underlying": underlying.upper(),
+            "expiry_date": expiry_date,
+            "option_chain": data,
             "price_source": price_source,
         }
 

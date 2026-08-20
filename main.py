@@ -57,19 +57,122 @@ def groww_get_holdings() -> dict[str, Any]:
 
 
 @mcp.tool()
-def groww_get_ltp(trading_symbol: str, exchange: str = "NSE") -> dict[str, Any]:
-    """Return last traded price (live tracking)."""
+def groww_get_ltp(
+    trading_symbol: str,
+    exchange: str = "NSE",
+    segment: str = "CASH",
+) -> dict[str, Any]:
+    """Return last traded price. Supports comma-separated symbols (up to 50)."""
+    if _mock():
+        symbols = [s.strip().upper() for s in trading_symbol.split(",") if s.strip()]
+        if len(symbols) == 1:
+            return {
+                "mode": "mock",
+                "trading_symbol": symbols[0],
+                "exchange": exchange.upper(),
+                "segment": segment.upper(),
+                "ltp": 1234.56,
+                "price_source": "mock",
+            }
+        return {
+            "mode": "mock",
+            "exchange": exchange.upper(),
+            "segment": segment.upper(),
+            "ltp": {f"{exchange.upper()}_{sym}": 1234.56 for sym in symbols},
+            "price_source": ["mock"],
+        }
+    from groww_mcp.config import Settings
+    from groww_mcp.groww_client import GrowwClient
+
+    return GrowwClient(Settings.from_env()).get_ltp(trading_symbol, exchange, segment)
+
+
+@mcp.tool()
+def groww_get_quote(
+    trading_symbol: str,
+    exchange: str = "NSE",
+    segment: str = "CASH",
+) -> dict[str, Any]:
+    """Return live quote with price, day change, volume, and OHLC snapshot."""
     if _mock():
         return {
             "mode": "mock",
             "trading_symbol": trading_symbol.upper(),
             "exchange": exchange.upper(),
-            "ltp": 1234.56,
+            "segment": segment.upper(),
+            "quote": {
+                "last_price": 1234.56,
+                "day_change": 12.34,
+                "day_change_perc": 1.01,
+                "volume": 100000,
+                "ohlc": {"open": 1220.0, "high": 1240.0, "low": 1210.0, "close": 1234.56},
+            },
+            "price_source": "mock",
         }
     from groww_mcp.config import Settings
     from groww_mcp.groww_client import GrowwClient
 
-    return GrowwClient(Settings.from_env()).get_ltp(trading_symbol, exchange)
+    return GrowwClient(Settings.from_env()).get_quote(trading_symbol, exchange, segment)
+
+
+@mcp.tool()
+def groww_get_ohlc(
+    trading_symbol: str,
+    exchange: str = "NSE",
+    segment: str = "CASH",
+) -> dict[str, Any]:
+    """Return OHLC for one or more comma-separated symbols (up to 50)."""
+    if _mock():
+        symbols = [s.strip().upper() for s in trading_symbol.split(",") if s.strip()]
+        return {
+            "mode": "mock",
+            "exchange": exchange.upper(),
+            "segment": segment.upper(),
+            "ohlc": {
+                f"{exchange.upper()}_{sym}": {
+                    "open": 1220.0,
+                    "high": 1240.0,
+                    "low": 1210.0,
+                    "close": 1234.56,
+                }
+                for sym in symbols
+            },
+            "price_source": "mock",
+        }
+    from groww_mcp.config import Settings
+    from groww_mcp.groww_client import GrowwClient
+
+    return GrowwClient(Settings.from_env()).get_ohlc(trading_symbol, exchange, segment)
+
+
+@mcp.tool()
+def groww_get_option_chain(
+    underlying: str,
+    expiry_date: str,
+    exchange: str = "NSE",
+) -> dict[str, Any]:
+    """Return option chain for an underlying and expiry date (YYYY-MM-DD)."""
+    if _mock():
+        return {
+            "mode": "mock",
+            "exchange": exchange.upper(),
+            "underlying": underlying.upper(),
+            "expiry_date": expiry_date,
+            "option_chain": {
+                "underlying_ltp": 25000.0,
+                "strikes": {
+                    "24800": {
+                        "CE": {"ltp": 180.5, "open_interest": 1200, "volume": 500},
+                        "PE": {"ltp": 95.2, "open_interest": 900, "volume": 300},
+                    }
+                },
+            },
+            "price_source": "mock",
+        }
+    from groww_mcp.config import Settings
+    from groww_mcp.groww_client import GrowwClient
+
+    return GrowwClient(Settings.from_env()).get_option_chain(underlying, expiry_date, exchange)
 
 
 @mcp.tool()
