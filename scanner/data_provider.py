@@ -1,32 +1,24 @@
-"""Market data provider with yfinance fallback and optional NSE enrichment."""
+"""Market data via Groww API (live) with Groww-managed fallbacks."""
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
-import yfinance as yf
+from growwapi import GrowwAPI
 
-from scanner.universe import yfinance_symbol
+from groww_mcp.config import Settings
+from groww_mcp.groww_client import GrowwClient
+from scanner.groww_adapters import candles_to_dataframe, groww_symbol, normalize_option_chain
 
-_MAX_RETRIES = 3
-_RETRY_DELAY_SEC = 1.5
-
-
-def _fetch_history(ticker: yf.Ticker, **kwargs: Any) -> pd.DataFrame:
-    for attempt in range(_MAX_RETRIES):
-        try:
-            frame = ticker.history(**kwargs)
-            if not frame.empty:
-                return frame
-        except Exception:
-            if attempt == _MAX_RETRIES - 1:
-                raise
-        time.sleep(_RETRY_DELAY_SEC * (attempt + 1))
-    return pd.DataFrame()
+logger = logging.getLogger(__name__)
+IST = ZoneInfo("Asia/Kolkata")
 
 
 @dataclass
@@ -38,71 +30,110 @@ class MarketSnapshot:
     option_chain: dict[str, Any] = field(default_factory=dict)
     catalysts: list[str] = field(default_factory=list)
     sector: str = "Other"
+    price_sources: list[str] = field(default_factory=list)
 
 
-class MarketDataProvider:
+class GrowwDataProvider:
+    """Fetch scanner inputs exclusively through GrowwClient."""
+
     def __init__(self) -> None:
+        self._client = GrowwClient(Settings.from_env())
+        self._nifty_daily: pd.DataFrame | None = None
         self._session = requests.Session()
         self._session.headers.update(
             {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "User-Agent": "Mozilla/5.0",
                 "Accept": "*/*",
                 "Referer": "https://www.nseindia.com/",
             }
         )
-        self._session_initialized = False
-        self._nifty_daily: pd.DataFrame | None = None
-        self._sector_returns: dict[str, float] = {}
 
-    def _ensure_nse_session(self) -> None:
-        if not self._session_initialized:
-            self._session.get("https://www.nseindia.com/", timeout=15)
-            self._session_initialized = True
+    @property
+    def has_live_credentials(self) -> bool:
+        return Settings.from_env().has_credentials()
 
     def get_nifty_daily(self) -> pd.DataFrame:
         if self._nifty_daily is None:
-            self._nifty_daily = _fetch_history(yf.Ticker("^NSEI"), period="60d", interval="1d")
+            self._nifty_daily = self._fetch_candles("NIFTY", "FNO", GrowwAPI.CANDLE_INTERVAL_DAY, days=60)
         return self._nifty_daily
 
     def fetch_snapshot(self, symbol: str, sector: str) -> MarketSnapshot | None:
-        time.sleep(0.15)
-        ticker = yf.Ticker(yfinance_symbol(symbol))
-        daily = _fetch_history(ticker, period="60d", interval="1d")
+        time.sleep(0.12)
+        sources: list[str] = []
+
+        daily = self._fetch_candles(symbol, "CASH", GrowwAPI.CANDLE_INTERVAL_DAY, days=60)
         if daily.empty or len(daily) < 15:
             return None
 
-        intraday = _fetch_history(ticker, period="5d", interval="5m")
-        catalysts = self._fetch_catalysts(symbol, ticker)
-        option_chain = self._fetch_option_chain(symbol)
+        intraday = self._fetch_candles(symbol, "CASH", GrowwAPI.CANDLE_INTERVAL_MIN_5, days=5)
+        quote_payload = self._safe_call(self._client.get_quote, symbol, "NSE", "CASH")
+        quote = quote_payload.get("quote", {}) if quote_payload else {}
+        if quote_payload:
+            sources.append(str(quote_payload.get("price_source", "groww")))
 
-        quote = {
-            "sector": sector,
-            "market_cap": ticker.info.get("marketCap"),
-            "avg_volume": ticker.info.get("averageVolume"),
-        }
+        spot = float(quote.get("last_price") or daily["Close"].iloc[-1])
+        option_chain = self._fetch_option_chain(symbol, spot, sources)
+        catalysts = self._fetch_catalysts(symbol)
+
         return MarketSnapshot(
             symbol=symbol,
             daily=daily,
             intraday=intraday,
-            quote=quote,
+            quote={
+                "sector": sector,
+                "last_price": spot,
+                "day_change_perc": quote.get("day_change_perc"),
+                "volume": quote.get("volume"),
+                "ohlc": quote.get("ohlc", {}),
+            },
             option_chain=option_chain,
             catalysts=catalysts,
             sector=sector,
+            price_sources=sorted(set(sources)),
         )
 
-    def _fetch_catalysts(self, symbol: str, ticker: yf.Ticker) -> list[str]:
+    def _fetch_candles(self, symbol: str, segment: str, interval: str, days: int) -> pd.DataFrame:
+        end = datetime.now(IST)
+        start = end - timedelta(days=days)
+        payload = self._safe_call(
+            self._client.get_historical_candles,
+            "NSE",
+            segment,
+            groww_symbol("NSE", symbol),
+            start.strftime("%Y-%m-%d %H:%M:%S"),
+            end.strftime("%Y-%m-%d %H:%M:%S"),
+            interval,
+        )
+        if not payload:
+            return pd.DataFrame()
+        frame = candles_to_dataframe(payload.get("data", payload))
+        return frame
+
+    def _fetch_option_chain(self, symbol: str, spot: float, sources: list[str]) -> dict[str, Any]:
+        expiries_payload = self._safe_call(self._client.get_expiries, "NSE", symbol)
+        expiries = []
+        if expiries_payload:
+            raw = expiries_payload.get("expiries", expiries_payload.get("data", {}))
+            if isinstance(raw, dict):
+                expiries = raw.get("expiries", [])
+            elif isinstance(raw, list):
+                expiries = raw
+            sources.append(str(expiries_payload.get("price_source", "groww")))
+
+        if not expiries:
+            return {}
+
+        expiry = expiries[0]
+        chain_payload = self._safe_call(self._client.get_option_chain, symbol, expiry, "NSE")
+        if not chain_payload:
+            return {}
+        sources.append(str(chain_payload.get("price_source", "groww")))
+        return normalize_option_chain(chain_payload, spot)
+
+    def _fetch_catalysts(self, symbol: str) -> list[str]:
         catalysts: list[str] = []
         try:
-            news = ticker.news or []
-            for item in news[:5]:
-                title = item.get("title") or item.get("content", {}).get("title")
-                if title:
-                    catalysts.append(title)
-        except Exception:
-            pass
-
-        try:
-            self._ensure_nse_session()
+            self._session.get("https://www.nseindia.com/", timeout=10)
             response = self._session.get(
                 "https://www.nseindia.com/api/live-analysis-variations?index=gainers",
                 timeout=10,
@@ -115,30 +146,9 @@ class MarketDataProvider:
                     for row in bucket.get("data", []):
                         if row.get("symbol") == symbol and row.get("ca_purpose"):
                             catalysts.append(row["ca_purpose"])
-        except Exception:
-            pass
-
-        deduped: list[str] = []
-        seen: set[str] = set()
-        for item in catalysts:
-            key = item.lower()
-            if key not in seen:
-                seen.add(key)
-                deduped.append(item)
-        return deduped[:5]
-
-    def _fetch_option_chain(self, symbol: str) -> dict[str, Any]:
-        try:
-            self._ensure_nse_session()
-            response = self._session.get(
-                f"https://www.nseindia.com/api/option-chain-equities?symbol={symbol}",
-                timeout=10,
-            )
-            if response.ok and response.content:
-                return response.json()
-        except Exception:
-            pass
-        return {}
+        except Exception as exc:
+            logger.debug("Catalyst fetch failed for %s: %s", symbol, exc)
+        return catalysts[:5]
 
     def batch_sector_returns(self, snapshots: dict[str, MarketSnapshot]) -> dict[str, float]:
         sector_moves: dict[str, list[float]] = {}
@@ -149,3 +159,15 @@ class MarketDataProvider:
             move = (daily["Close"].iloc[-1] / daily["Close"].iloc[-2] - 1) * 100
             sector_moves.setdefault(snap.sector, []).append(move)
         return {sector: sum(vals) / len(vals) for sector, vals in sector_moves.items() if vals}
+
+    @staticmethod
+    def _safe_call(func, *args, **kwargs) -> dict[str, Any] | None:
+        try:
+            return func(*args, **kwargs)
+        except Exception as exc:
+            logger.debug("Groww call %s failed: %s", func.__name__, exc)
+            return None
+
+
+# Backwards-compatible alias used by scanner
+MarketDataProvider = GrowwDataProvider

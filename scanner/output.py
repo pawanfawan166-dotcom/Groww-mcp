@@ -47,6 +47,11 @@ def format_top_candidate(c: ScanCandidate | None) -> str:
         f"Risk/Reward: {c.levels.risk_reward}",
         f"Extreme Momentum Score: {c.total_score:.1f}/100",
         f"Confidence: {c.confidence}",
+    ]
+    if getattr(c, "price_sources", None):
+        lines.append(f"Data Source: Groww ({', '.join(c.price_sources)})")
+    lines.extend(
+        [
         "",
         "Score Breakdown:",
         f"  Catalyst: {c.score.catalyst:.1f}/10",
@@ -61,7 +66,8 @@ def format_top_candidate(c: ScanCandidate | None) -> str:
         f"  Risk/Reward: {c.score.risk_reward:.1f}/5",
         "",
         "WHY THIS STOCK COULD BE ENTERING AN EXPANSION PHASE NOW:",
-    ]
+        ]
+    )
     for item in c.why:
         lines.append(f"  • {item}")
 

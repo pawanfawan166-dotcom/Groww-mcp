@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any
 
-from scanner.data_provider import MarketDataProvider, MarketSnapshot
+from scanner.data_provider import GrowwDataProvider, MarketDataProvider, MarketSnapshot
 from scanner.scoring import (
     ScoreBreakdown,
     TradeLevels,
@@ -55,6 +55,7 @@ class ScanCandidate:
     confidence: str
     why: list[str] = field(default_factory=list)
     signal_details: dict[str, list[str]] = field(default_factory=dict)
+    price_sources: list[str] = field(default_factory=list)
 
     @property
     def total_score(self) -> float:
@@ -65,7 +66,7 @@ class EarlyMomentumScanner:
     """Scan NSE F&O universe for early extreme-momentum setups."""
 
     def __init__(self, max_workers: int = 3) -> None:
-        self.provider = MarketDataProvider()
+        self.provider = GrowwDataProvider()
         self.max_workers = max_workers
 
     def scan(self, symbols: list[str] | None = None, limit: int | None = None) -> list[ScanCandidate]:
@@ -178,6 +179,7 @@ class EarlyMomentumScanner:
                 "oi": futures_oi.details,
                 "options": options.details,
             },
+            price_sources=snap.price_sources,
         )
 
     def top_candidate(self, candidates: list[ScanCandidate]) -> ScanCandidate | None:
