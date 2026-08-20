@@ -14,6 +14,11 @@ except ImportError:
     pass
 
 
+def allow_yahoo_fallback() -> bool:
+    """Yahoo fallback is opt-in only. Default: Groww-only (strict)."""
+    return os.getenv("GROWW_ALLOW_FALLBACK", "0").lower() in {"1", "true", "yes"}
+
+
 @dataclass(frozen=True)
 class Settings:
     access_token: str | None = None

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 
 from groww_mcp.config import Settings
@@ -24,9 +25,22 @@ def main() -> int:
 
     creds = Settings.from_env()
     if creds.has_credentials():
-        print("Data source: Groww API (live)")
+        print("Data source: Groww API (strict — no Yahoo fallback)")
+        import subprocess
+        result = subprocess.run(
+            ["python3", "scripts/groww_diagnose.py"],
+            cwd=os.path.dirname(os.path.dirname(__file__)) or ".",
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 2:
+            print(result.stdout)
+            print("Scanner cannot run until Groww market data is enabled.")
+            return 2
+        if result.returncode != 0:
+            print(result.stdout or result.stderr)
     else:
-        print("Data source: Groww client with fallback (set GROWW_ACCESS_TOKEN or GROWW_API_KEY + TOTP)")
+        print("Data source: credentials missing — set GROWW_API_KEY + GROWW_TOTP_SECRET")
     print()
 
     scanner = EarlyMomentumScanner()

@@ -7,7 +7,8 @@ from zoneinfo import ZoneInfo
 import pyotp
 from growwapi import GrowwAPI
 
-from groww_mcp.config import Settings
+from groww_mcp.config import Settings, allow_yahoo_fallback
+from groww_mcp.exceptions import GrowwMarketDataForbiddenError
 from groww_mcp.market_data import (
     fetch_contracts as fetch_contracts_fallback,
     fetch_expiries as fetch_expiries_fallback,
@@ -93,6 +94,11 @@ class GrowwClient:
     def _exchange_symbol(exchange: str, trading_symbol: str) -> str:
         return f"{exchange.upper()}_{trading_symbol.upper()}"
 
+    def _on_market_data_error(self, exc: Exception, endpoint: str, fallback_fn, *args, **kwargs) -> Any:
+        """Groww-only by default; Yahoo/synthetic fallbacks are opt-in."""
+        if allow_yahoo_fallback():
+            return fallback_fn(*args, **kwargs)
+        raise GrowwMarketDataForbiddenError(str(exc), endpoint=endpoint) from exc
 
     def get_holdings(self) -> dict[str, Any]:
         response = self._ensure_client().get_holdings_for_user(timeout=15)
@@ -135,8 +141,10 @@ class GrowwClient:
                 timeout=15,
             )
             ltp = response.get(exchange_symbol) if isinstance(response, dict) else response
-        except Exception:
-            ltp = fetch_ltp_fallback(trading_symbol, exchange)
+        except Exception as exc:
+            ltp = self._on_market_data_error(
+                exc, "get_ltp", fetch_ltp_fallback, trading_symbol, exchange
+            )
             price_source = "yahoo_finance"
 
         return {
@@ -162,8 +170,10 @@ class GrowwClient:
                 segment=self._resolve_segment(segment),
                 timeout=15,
             )
-        except Exception:
-            data = fetch_quote_fallback(trading_symbol, exchange)
+        except Exception as exc:
+            data = self._on_market_data_error(
+                exc, "get_quote", fetch_quote_fallback, trading_symbol, exchange
+            )
             price_source = "yahoo_finance"
 
         return {
@@ -190,11 +200,15 @@ class GrowwClient:
                 segment=self._resolve_segment(segment),
                 timeout=15,
             )
-        except Exception:
-            data = {
-                self._exchange_symbol(exchange, symbol): fetch_ohlc_fallback(symbol, exchange)
-                for symbol in symbols
-            }
+        except Exception as exc:
+            data = self._on_market_data_error(
+                exc,
+                "get_ohlc",
+                lambda: {
+                    self._exchange_symbol(exchange, symbol): fetch_ohlc_fallback(symbol, exchange)
+                    for symbol in symbols
+                },
+            )
             price_source = "yahoo_finance"
 
         return {
@@ -219,8 +233,10 @@ class GrowwClient:
                 expiry_date=expiry_date,
                 timeout=15,
             )
-        except Exception:
-            data = fetch_option_chain_fallback(underlying, exchange, expiry_date)
+        except Exception as exc:
+            data = self._on_market_data_error(
+                exc, "get_option_chain", fetch_option_chain_fallback, underlying, exchange, expiry_date
+            )
             price_source = "yahoo_finance"
 
         return {
@@ -247,8 +263,10 @@ class GrowwClient:
                 trading_symbol=trading_symbol.upper(),
                 expiry=expiry,
             )
-        except Exception:
-            data = fetch_greeks_fallback(underlying, trading_symbol, expiry, exchange)
+        except Exception as exc:
+            data = self._on_market_data_error(
+                exc, "get_greeks", fetch_greeks_fallback, underlying, trading_symbol, expiry, exchange
+            )
             price_source = "black_scholes_estimate"
 
         return {
@@ -281,8 +299,11 @@ class GrowwClient:
                 candle_interval=candle_interval,
                 timeout=15,
             )
-        except Exception:
-            data = fetch_historical_candles_fallback(
+        except Exception as exc:
+            data = self._on_market_data_error(
+                exc,
+                "get_historical_candles",
+                fetch_historical_candles_fallback,
                 self._trading_symbol_from_groww(groww_symbol),
                 exchange,
                 start_time,
@@ -317,8 +338,10 @@ class GrowwClient:
                 month=month,
                 timeout=15,
             )
-        except Exception:
-            data = fetch_expiries_fallback(underlying_symbol, exchange, year, month)
+        except Exception as exc:
+            data = self._on_market_data_error(
+                exc, "get_expiries", fetch_expiries_fallback, underlying_symbol, exchange, year, month
+            )
             price_source = "calendar_estimate"
 
         return {
@@ -343,8 +366,10 @@ class GrowwClient:
                 expiry_date=expiry_date,
                 timeout=15,
             )
-        except Exception:
-            data = fetch_contracts_fallback(underlying_symbol, expiry_date, exchange)
+        except Exception as exc:
+            data = self._on_market_data_error(
+                exc, "get_contracts", fetch_contracts_fallback, underlying_symbol, expiry_date, exchange
+            )
             price_source = "synthetic_estimate"
 
         return {
