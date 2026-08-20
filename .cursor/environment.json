@@ -1,0 +1,5 @@
+{
+  "name": "Groww MCP Scanner",
+  "install": "pip install -r requirements.txt",
+  "start": "test -n \"$GROWW_ACCESS_TOKEN\" -o -n \"$GROWW_CREDENTIALS\" -o \\( -n \"$GROWW_API_KEY\" -a \\( -n \"$GROWW_TOTP_SECRET\" -o -n \"$GROWW_API_SECRET\" \\) \\) && export GROWW_MOCK_MODE=0 || true"
+}
