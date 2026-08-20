@@ -21,7 +21,15 @@ def _mock() -> bool:
     return os.getenv("GROWW_MOCK_MODE", "1").lower() in {"1", "true", "yes"} or not (
         os.getenv("GROWW_ACCESS_TOKEN")
         or os.getenv("GROWW_CREDENTIALS")
-        or (os.getenv("GROWW_API_KEY") and (os.getenv("TOTP_SECRET") or os.getenv("GROWW_TOTP_SECRET")))
+        or (
+            os.getenv("GROWW_API_KEY")
+            and (
+                os.getenv("TOTP_SECRET")
+                or os.getenv("GROWW_TOTP_SECRET")
+                or os.getenv("GROWW_API_SECRET")
+                or os.getenv("GROWW_SECRET")
+            )
+        )
     )
 
 
@@ -62,6 +70,53 @@ def groww_get_ltp(trading_symbol: str, exchange: str = "NSE") -> dict[str, Any]:
     from groww_mcp.groww_client import GrowwClient
 
     return GrowwClient(Settings.from_env()).get_ltp(trading_symbol, exchange)
+
+
+@mcp.tool()
+def groww_get_portfolio() -> dict[str, Any]:
+    """Return full portfolio with live market prices, invested value, current value, and P&L."""
+    if _mock():
+        client_ltp = 1234.56
+        holdings = [
+            {"trading_symbol": "RELIANCE", "quantity": 10, "average_price": 2450.5},
+            {"trading_symbol": "INFY", "quantity": 25, "average_price": 1520.0},
+        ]
+        rows = []
+        total_invested = 0.0
+        total_current = 0.0
+        for h in holdings:
+            invested = h["quantity"] * h["average_price"]
+            current = h["quantity"] * client_ltp
+            total_invested += invested
+            total_current += current
+            rows.append(
+                {
+                    "trading_symbol": h["trading_symbol"],
+                    "quantity": h["quantity"],
+                    "average_price": h["average_price"],
+                    "ltp": client_ltp,
+                    "invested": round(invested, 2),
+                    "current_value": round(current, 2),
+                    "pnl": round(current - invested, 2),
+                    "pnl_percent": round(((current - invested) / invested) * 100, 2),
+                    "price_source": "mock",
+                }
+            )
+        total_pnl = total_current - total_invested
+        return {
+            "mode": "mock",
+            "price_source": ["mock"],
+            "holdings": rows,
+            "total_invested": round(total_invested, 2),
+            "total_current_value": round(total_current, 2),
+            "total_pnl": round(total_pnl, 2),
+            "total_pnl_percent": round((total_pnl / total_invested) * 100, 2),
+        }
+
+    from groww_mcp.config import Settings
+    from groww_mcp.groww_client import GrowwClient
+
+    return GrowwClient(Settings.from_env()).get_portfolio_summary()
 
 
 @mcp.tool()

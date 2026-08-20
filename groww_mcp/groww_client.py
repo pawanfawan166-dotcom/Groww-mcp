@@ -8,6 +8,7 @@ import pyotp
 from growwapi import GrowwAPI
 
 from groww_mcp.config import Settings
+from groww_mcp.market_data import fetch_ltp as fetch_ltp_fallback
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -64,15 +65,68 @@ class GrowwClient:
 
     def get_ltp(self, trading_symbol: str, exchange: str = "NSE") -> dict[str, Any]:
         exchange_symbol = f"{exchange.upper()}_{trading_symbol.upper()}"
-        response = self._ensure_client().get_ltp(
-            (exchange_symbol,),
-            segment=GrowwAPI.SEGMENT_CASH,
-            timeout=15,
-        )
-        ltp = response.get(exchange_symbol) if isinstance(response, dict) else response
+        price_source = "groww"
+        try:
+            response = self._ensure_client().get_ltp(
+                (exchange_symbol,),
+                segment=GrowwAPI.SEGMENT_CASH,
+                timeout=15,
+            )
+            ltp = response.get(exchange_symbol) if isinstance(response, dict) else response
+        except Exception:
+            ltp = fetch_ltp_fallback(trading_symbol, exchange)
+            price_source = "yahoo_finance"
+
         return {
             "mode": "live",
             "trading_symbol": trading_symbol.upper(),
             "exchange": exchange.upper(),
             "ltp": ltp,
+            "price_source": price_source,
+        }
+
+    def get_portfolio_summary(self) -> dict[str, Any]:
+        holdings_data = self.get_holdings()["holdings"]
+        rows: list[dict[str, Any]] = []
+        total_invested = 0.0
+        total_current = 0.0
+        price_sources: set[str] = set()
+
+        for holding in holdings_data:
+            symbol = holding["trading_symbol"]
+            qty = float(holding["quantity"])
+            avg = float(holding["average_price"])
+            invested = qty * avg
+            ltp_info = self.get_ltp(symbol)
+            ltp = float(ltp_info["ltp"])
+            current = qty * ltp
+            pnl = current - invested
+            price_sources.add(str(ltp_info.get("price_source", "groww")))
+
+            rows.append(
+                {
+                    "trading_symbol": symbol,
+                    "quantity": qty,
+                    "average_price": avg,
+                    "ltp": ltp,
+                    "invested": round(invested, 2),
+                    "current_value": round(current, 2),
+                    "pnl": round(pnl, 2),
+                    "pnl_percent": round((pnl / invested) * 100, 2) if invested else 0.0,
+                    "price_source": ltp_info.get("price_source", "groww"),
+                    "isin": holding.get("isin"),
+                }
+            )
+            total_invested += invested
+            total_current += current
+
+        total_pnl = total_current - total_invested
+        return {
+            "mode": "live",
+            "price_source": sorted(price_sources),
+            "holdings": rows,
+            "total_invested": round(total_invested, 2),
+            "total_current_value": round(total_current, 2),
+            "total_pnl": round(total_pnl, 2),
+            "total_pnl_percent": round((total_pnl / total_invested) * 100, 2) if total_invested else 0.0,
         }
